@@ -24,6 +24,8 @@
     float _Diffusion;
     float _Contrast;
     float _Velocity;
+    float _LOD;
+    float _EigenMin;
 
     // PRNG
     float UVRandom(float2 uv)
@@ -53,7 +55,25 @@
         return o;
     }
 
-    #define LOD 0.0
+    // From: https://gist.github.com/983/e170a24ae8eba2cd174f
+    float3 hsv2rgb(float3 c)
+    {
+        float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+        float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
+        return c.z * lerp(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+    }
+
+    float4 vectorToHue(float2 mv) {
+        float mag = length(mv.xy);
+        float ang = atan2(mv.y, mv.x)/(2.*3.14159) + .5;
+    
+        // Remove noisey small values and scale down
+        mag *= 0.5 * smoothstep(0., 1., mag);
+    
+        float3 col = float3( ang, 1., mag );
+        col = hsv2rgb(col);
+        return float4(col.r, col.g, col.b, 1.0);
+    }
 
     float lum( float4 col ) {
         return dot( col, float4(0.333, 0.333, 0.333, 0.0));
@@ -70,6 +90,7 @@
     }
 
     // Eigenvalues function
+    // 3Blue1Brown https://www.youtube.com/watch?v=e50Bj7jn9IQ
     float2 eigenValues(float2x2 A) {
         float m = 0.5 * tr2(A);
         float p = det(A);
@@ -108,7 +129,7 @@
     float4 frag_derivatives(v2f_img i) : SV_Target
     {
         float2 uv = i.uv;
-        float2 texelLod = pow(2., LOD) / _MainTex_TexelSize.zw;
+        float2 texelLod = pow(2., _LOD) / _MainTex_TexelSize.zw;
 
         float4 N = tex2D(_MainTex, uv + float2( 0., 1.) * texelLod);
         float4 E = tex2D(_MainTex, uv + float2( 1., 0.) * texelLod);
@@ -125,16 +146,17 @@
         float dIdy = lum( (N - S)/2. );
         float dIdt = cur - pre;
 
-        float diff = lum(tex2D(_MainTex, uv)) - lum(tex2D(_PrevTex, uv));
-
         return float4(dIdx, dIdy, dIdt, cur);
     }
 
     float4 frag_of_lucaskanade(v2f_img i) : SV_Target
     {
+        //float r = tex2D(_MainTex, i.uv).b*10.0;
+        //return float4(r,r,r,1.0);
+
         float2 uv = i.uv;
-        float2 texel = _DispTex_TexelSize.xy;
-            
+        float2 texel = _MainTex_TexelSize.xy;
+        
         float2x2 structureTensor = float2x2(0.0, 0.0, 0.0, 0.0);
         float2 Atb = float2(0.0, 0.0);
         for(float i = -_HalfSize; i < _HalfSize; i++) {
@@ -142,30 +164,38 @@
                 float2 loc = uv + float2(i, j) * texel;
                 float2 dis = loc - uv;
                 float weight = exp(-dot(dis, dis) / 3.0);
-                float4 deriv = tex2D(_DispTex, loc);
+                float4 deriv = tex2D(_MainTex, loc);
                 structureTensor += float2x2(weight * deriv.x * deriv.x, weight * deriv.x * deriv.y, weight * deriv.x * deriv.y, weight * deriv.y * deriv.y);
                 Atb -= float2(weight * deriv.x * deriv.z, weight * deriv.y * deriv.z);
             }
         }
-        float2 mv = mul(inverse2x2(structureTensor), Atb) * _Velocity;
+        float2 mv = mul(inverse2x2(structureTensor), Atb);
 
         // Remove bad features
         float2 e = eigenValues(structureTensor);
-        if(e.x < 0.001 || e.y < 0.001) {
+        if(e.x < _EigenMin || e.y < _EigenMin) {
             mv = float2(0.0, 0.0);
         }
+
+        return float4(mv, 0.0, 1.0);
+    }
+
+    float4 frag_update(v2f_img i) : SV_Target
+    {
+        float2 uv = i.uv;
         // ----------------------------
         float2 t0 = float2(_Time.y, 0);
-        // Random numbers
         float3 rand = float3(
             UVRandom(uv + t0.xy),
             UVRandom(uv + t0.yx),
             UVRandom(uv.yx - t0.xx)
         );
         // ---------------------------
+        float2 mv = tex2D(_DispTex, uv).rg;
+        mv *= _Velocity;
+
         // Normalized screen space -> Pixel coordinates
         mv *= _ScreenParams.xy;
-        //mv *= _DispTex_TexelSize.zw;
 
         // Small random displacement (diffusion)
         mv += (rand.xy - 0.5) * _Diffusion;
@@ -186,7 +216,8 @@
 
         // Pixel coordinates -> Normalized screen space
         mv *= (_ScreenParams.zw - 1);
-        //mv *= texel;
+
+        //mv *= tex2D(_MainTex, uv).b;
 
         // Random number (changing by motion)
         half mrand = UVRandom(uv + mv_len);
@@ -251,14 +282,6 @@
         {
             CGPROGRAM
             #pragma vertex vert_img
-            #pragma fragment frag_vectors
-            #pragma target 3.0
-            ENDCG
-        }
-        Pass
-        {
-            CGPROGRAM
-            #pragma vertex vert_img
             #pragma fragment frag_derivatives
             #pragma target 3.0
             ENDCG
@@ -268,6 +291,14 @@
             CGPROGRAM
             #pragma vertex vert_img
             #pragma fragment frag_of_lucaskanade
+            #pragma target 3.0
+            ENDCG
+        }
+        Pass
+        {
+            CGPROGRAM
+            #pragma vertex vert_img
+            #pragma fragment frag_update
             #pragma target 3.0
             ENDCG
         }
