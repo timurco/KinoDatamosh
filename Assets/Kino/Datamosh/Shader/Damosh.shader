@@ -12,9 +12,18 @@
 
     sampler2D _MainTex;
     sampler2D _PrevTex;
+    sampler2D _DispTex;
 
     float4 _MainTex_TexelSize;
+    float4 _DispTex_TexelSize;
+
     float _BlockSize;
+    float _HalfSize;
+    float _Denoise;
+    float _Quality;
+    float _Diffusion;
+    float _Contrast;
+    float _Velocity;
 
     // PRNG
     float UVRandom(float2 uv)
@@ -45,8 +54,6 @@
     }
 
     #define LOD 0.0
-    #define FRAMES 1.0
-    #define halfSize 5.0
 
     float lum( float4 col ) {
         return dot( col, float4(0.333, 0.333, 0.333, 0.0));
@@ -112,7 +119,7 @@
         float pre = tex2D(_PrevTex, uv).a;
 
         // Temporal denoising
-        cur = lerp(pre, cur, 1./(1.+ FRAMES));
+        cur = lerp(pre, cur, 1./(1.+ _Denoise));
 
         float dIdx = lum( (E - W)/2. );
         float dIdy = lum( (N - S)/2. );
@@ -126,29 +133,104 @@
     float4 frag_of_lucaskanade(v2f_img i) : SV_Target
     {
         float2 uv = i.uv;
-        float2 texel = 1.0 / _ScreenParams.xy;
+        float2 texel = _DispTex_TexelSize.xy;
             
         float2x2 structureTensor = float2x2(0.0, 0.0, 0.0, 0.0);
         float2 Atb = float2(0.0, 0.0);
-        for(float i = -halfSize; i < halfSize; i++) {
-            for(float j = -halfSize; j < halfSize; j++) {
+        for(float i = -_HalfSize; i < _HalfSize; i++) {
+            for(float j = -_HalfSize; j < _HalfSize; j++) {
                 float2 loc = uv + float2(i, j) * texel;
                 float2 dis = loc - uv;
                 float weight = exp(-dot(dis, dis) / 3.0);
-                float4 deriv = tex2D(_MainTex, loc);
+                float4 deriv = tex2D(_DispTex, loc);
                 structureTensor += float2x2(weight * deriv.x * deriv.x, weight * deriv.x * deriv.y, weight * deriv.x * deriv.y, weight * deriv.y * deriv.y);
                 Atb -= float2(weight * deriv.x * deriv.z, weight * deriv.y * deriv.z);
             }
         }
-        float2 motion = mul(inverse2x2(structureTensor), Atb);
-            
+        float2 mv = mul(inverse2x2(structureTensor), Atb) * _Velocity;
+
         // Remove bad features
         float2 e = eigenValues(structureTensor);
         if(e.x < 0.001 || e.y < 0.001) {
-            motion = float2(0.0, 0.0);
-        } 
+            mv = float2(0.0, 0.0);
+        }
+        // ----------------------------
+        float2 t0 = float2(_Time.y, 0);
+        // Random numbers
+        float3 rand = float3(
+            UVRandom(uv + t0.xy),
+            UVRandom(uv + t0.yx),
+            UVRandom(uv.yx - t0.xx)
+        );
+        // ---------------------------
+        // Normalized screen space -> Pixel coordinates
+        mv *= _ScreenParams.xy;
+        //mv *= _DispTex_TexelSize.zw;
+
+        // Small random displacement (diffusion)
+        mv += (rand.xy - 0.5) * _Diffusion;
+
+        // Pixel perfect snapping
+        mv = round(mv);
+
+        // Accumulates the amount of motion.
+        half acc = tex2D(_MainTex, uv).a;
+        half mv_len = length(mv);
+        // - Simple update
+        half acc_update = acc + min(mv_len, _BlockSize) * 0.005;
+        acc_update += rand.z * lerp(-0.02, 0.02, _Quality);
+        // - Reset to random level
+        half acc_reset = rand.z * 0.5 + _Quality;
+        // - Reset if the amount of motion is larger than the block size.
+        acc = saturate(mv_len > _BlockSize ? acc_reset : acc_update);
+
+        // Pixel coordinates -> Normalized screen space
+        mv *= (_ScreenParams.zw - 1);
+        //mv *= texel;
+
+        // Random number (changing by motion)
+        half mrand = UVRandom(uv + mv_len);
             
-        return float4(motion, 0.0, 1.0);
+        return half4(mv, mrand, acc);
+    }
+
+    // Moshing shader
+    half4 frag_mosh(v2f_multitex i) : SV_Target
+    {
+        // Color from the original image
+        half4 src = tex2D(_MainTex, i.uv1);
+
+        // Displacement vector (x, y, random, acc)
+        half4 disp = tex2D(_DispTex, i.uv0);
+
+        // Color from the working buffer (slightly scaled to make it blurred)
+        half3 work = tex2D(_PrevTex, i.uv1 - disp.xy * 0.98).rgb;
+
+        // Generate some pseudo random numbers.
+        float4 rand = frac(float4(1, 17.37135, 841.4272, 3305.121) * disp.z);
+
+        // Generate noise patterns that look like DCT bases.
+        // - Frequency
+        float2 uv = i.uv1 * _DispTex_TexelSize.zw * (rand.x * 80 / _Contrast);
+        // - Basis wave (vertical or horizontal)
+        float dct = cos(lerp(uv.x, uv.y, 0.5 < rand.y));
+        // - Random amplitude (the high freq, the less amp)
+        dct *= rand.z * (1 - rand.x) * _Contrast;
+
+        // Conditional weighting
+        // - DCT-ish noise: acc > 0.5
+        float cw = (disp.w > 0.5) * dct;
+        // - Original image: rand < (Q * 0.8 + 0.2) && acc == 1.0
+        cw = lerp(cw, 1, rand.w < lerp(0.2, 1, _Quality) * (disp.w > 0.999));
+        // - If the conditions above are not met, choose work.
+
+        float3 res;
+        res.r = lerp(work, src.rgb, cw * 0.3).r;
+        res.g = lerp(work, src.rgb, cw * 0.7).g;
+        res.b = lerp(work, src.rgb, cw).b;
+
+
+        return half4(res, src.a);
     }
 
 
@@ -186,6 +268,14 @@
             CGPROGRAM
             #pragma vertex vert_img
             #pragma fragment frag_of_lucaskanade
+            #pragma target 3.0
+            ENDCG
+        }
+        Pass
+        {
+            CGPROGRAM
+            #pragma vertex vert_multitex
+            #pragma fragment frag_mosh
             #pragma target 3.0
             ENDCG
         }

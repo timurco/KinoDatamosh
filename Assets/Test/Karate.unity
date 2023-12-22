@@ -634,7 +634,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d2c230ba326dd404782fad5c33cdf19b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _blockSize: 16
+  _blockSize: 4
+  _denoise: 1
+  _halfSize: 1
+  _entropy: 0.5
+  _noiseContrast: 1
+  _diffusion: 0.4
   flowMaterial: {fileID: 0}
 --- !u!850595691 &1427622673
 LightingSettings:

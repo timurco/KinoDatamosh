@@ -193,7 +193,6 @@ namespace Kino
             else
             {
                 // Step 2: apply effect.
-
                 if (Time.frameCount != _lastFrame)
                 {
                     // Update the displaceent buffer.
