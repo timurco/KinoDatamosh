@@ -14,7 +14,7 @@ public class Damosh : MonoBehaviour
         set { _blockSize = value; }
     }
 
-    [SerializeField, Range(1, 256)]
+    [SerializeField, Range(2, 100)]
     int _blockSize = 4;
 
     [SerializeField, Range(0.0f, 100.0f)]
@@ -35,13 +35,17 @@ public class Damosh : MonoBehaviour
     [SerializeField, Range(0, 2)]
     float _diffusion = 0.4f;
 
+    [SerializeField, Range(0, 1)]
+    float _displace = 0.98f;
+
     [SerializeField, Range(0, 5)]
     float _LOD = 0.4f;
 
     [SerializeField, Range(0, 1)]
     float _eigenMin = 0.01f;
 
-    [SerializeField] protected Material flowMaterial;
+    protected Material flowMaterial;
+    protected Material previewMaterial;
     protected RenderTexture prevFrame, flowBuffer, resultBuffer, derivBuffer, dispBuffer, sourceBuffer;
 
     protected int _lastFrame;
@@ -70,6 +74,7 @@ public class Damosh : MonoBehaviour
         flowMaterial.SetFloat("_Contrast", _noiseContrast);
         flowMaterial.SetFloat("_Velocity", _velocityScale);
         flowMaterial.SetFloat("_Diffusion", _diffusion);
+        flowMaterial.SetFloat("_Displace", _displace);
         flowMaterial.SetFloat("_LOD", _LOD);
         flowMaterial.SetFloat("_EigenMin", _eigenMin);
 
@@ -85,7 +90,7 @@ public class Damosh : MonoBehaviour
 
             // Update the displaceent buffer.
             var newDisp = NewDispBuffer(source.width, source.height);
-            flowMaterial.SetTexture("_DispTex", flowBuffer);
+            flowMaterial.SetTexture("_FlowTex", flowBuffer);
             Graphics.Blit(dispBuffer, newDisp, flowMaterial, 3);
             ReleaseBuffer(dispBuffer);
             dispBuffer = newDisp;
@@ -125,12 +130,15 @@ public class Damosh : MonoBehaviour
         flowMaterial = new Material(Shader.Find("Hidden/Kino/Damosh"));
         flowMaterial.hideFlags = HideFlags.DontSave;
 
+        previewMaterial = new Material(Shader.Find("Hidden/Kino/Preview"));
+        previewMaterial.hideFlags = HideFlags.DontSave;
+
         ReleaseBuffer(dispBuffer);
         dispBuffer = NewDispBuffer(Screen.width, Screen.height);
         Graphics.Blit(null, dispBuffer, flowMaterial, 0);
 
-        
-        //Graphics.Blit(null, resultBuffer, flowMaterial, 0);
+        GetComponent<Camera>().depthTextureMode |=
+                DepthTextureMode.Depth | DepthTextureMode.MotionVectors;
 
         UnityEngine.Debug.Log("Enabled");
     }
@@ -186,11 +194,16 @@ public class Damosh : MonoBehaviour
         if (prevFrame == null || flowBuffer == null) return;
 
         const int offset = 10;
+        int win_id = 1;
         int width = Screen.width / 4, height = Screen.height / 4;
         GUI.DrawTexture(new Rect(offset, offset, width, height), sourceBuffer);
-        GUI.DrawTexture(new Rect(offset, offset + height * 1, width, height), derivBuffer);
-        GUI.DrawTexture(new Rect(offset, offset + height * 2, width, height), flowBuffer);
-        GUI.DrawTexture(new Rect(offset, offset + height * 3, width, height), dispBuffer);
+        previewMaterial.SetInt("_ViewMode", 2);
+        Graphics.DrawTexture(new Rect(offset, offset + height * win_id++, width, height), flowBuffer, previewMaterial);
+        previewMaterial.SetInt("_ViewMode", 2);
+        previewMaterial.SetFloat("_Intensity", 10.0f);
+        Graphics.DrawTexture(new Rect(offset, offset + height * win_id++, width, height), dispBuffer, previewMaterial);
+        previewMaterial.SetInt("_ViewMode", 3);
+        Graphics.DrawTexture(new Rect(offset, offset + height * win_id++, width, height), dispBuffer, previewMaterial);
     }
 
 

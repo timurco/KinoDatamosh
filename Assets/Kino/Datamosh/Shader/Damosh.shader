@@ -13,26 +13,25 @@
     sampler2D _MainTex;
     sampler2D _PrevTex;
     sampler2D _DispTex;
+    sampler2D _FlowTex;
 
     float4 _MainTex_TexelSize;
     float4 _DispTex_TexelSize;
+    float4 _FlowTex_TexelSize;
+
+    sampler2D_half _CameraMotionVectorsTexture;
+    float4 _CameraMotionVectorsTexture_TexelSize;
 
     float _BlockSize;
     float _HalfSize;
     float _Denoise;
     float _Quality;
     float _Diffusion;
+    float _Displace;
     float _Contrast;
     float _Velocity;
     float _LOD;
     float _EigenMin;
-
-    // PRNG
-    float UVRandom(float2 uv)
-    {
-        float f = dot(float2(12.9898, 78.233), uv);
-        return frac(43758.5453 * sin(f));
-    }
 
     // Vertex shader for multi texturing
     struct v2f_multitex
@@ -55,24 +54,11 @@
         return o;
     }
 
-    // From: https://gist.github.com/983/e170a24ae8eba2cd174f
-    float3 hsv2rgb(float3 c)
+    // PRNG
+    float UVRandom(float2 uv)
     {
-        float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-        float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
-        return c.z * lerp(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
-    }
-
-    float4 vectorToHue(float2 mv) {
-        float mag = length(mv.xy);
-        float ang = atan2(mv.y, mv.x)/(2.*3.14159) + .5;
-    
-        // Remove noisey small values and scale down
-        mag *= 0.5 * smoothstep(0., 1., mag);
-    
-        float3 col = float3( ang, 1., mag );
-        col = hsv2rgb(col);
-        return float4(col.r, col.g, col.b, 1.0);
+        float f = dot(float2(12.9898, 78.233), uv);
+        return frac(43758.5453 * sin(f));
     }
 
     float lum( float4 col ) {
@@ -191,7 +177,8 @@
             UVRandom(uv.yx - t0.xx)
         );
         // ---------------------------
-        float2 mv = tex2D(_DispTex, uv).rg;
+        //float2 mv = tex2D(_CameraMotionVectorsTexture, uv).rg;
+        float2 mv = tex2D(_FlowTex, uv).rg * 0.1;
         mv *= _Velocity;
 
         // Normalized screen space -> Pixel coordinates
@@ -235,7 +222,7 @@
         half4 disp = tex2D(_DispTex, i.uv0);
 
         // Color from the working buffer (slightly scaled to make it blurred)
-        half3 work = tex2D(_PrevTex, i.uv1 - disp.xy * 0.98).rgb;
+        half3 work = tex2D(_PrevTex, i.uv1 - disp.xy * _Displace).rgb;
 
         // Generate some pseudo random numbers.
         float4 rand = frac(float4(1, 17.37135, 841.4272, 3305.121) * disp.z);
@@ -255,10 +242,7 @@
         cw = lerp(cw, 1, rand.w < lerp(0.2, 1, _Quality) * (disp.w > 0.999));
         // - If the conditions above are not met, choose work.
 
-        float3 res;
-        res.r = lerp(work, src.rgb, cw * 0.3).r;
-        res.g = lerp(work, src.rgb, cw * 0.7).g;
-        res.b = lerp(work, src.rgb, cw).b;
+        float3 res = lerp(work, src.rgb, cw);
 
 
         return half4(res, src.a);

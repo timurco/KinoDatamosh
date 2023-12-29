@@ -634,16 +634,16 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d2c230ba326dd404782fad5c33cdf19b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _blockSize: 5
-  _denoise: 5
-  _halfSize: 3.7
-  _entropy: 0.521
-  _noiseContrast: 0.01
-  _velocityScale: 0.01
-  _diffusion: 0.14
-  _LOD: 0.81
+  _blockSize: 16
+  _denoise: 0.5
+  _halfSize: 3.5
+  _entropy: 1
+  _noiseContrast: 0.001
+  _velocityScale: 1.06
+  _diffusion: 0
+  _displace: 0.138
+  _LOD: 0.78
   _eigenMin: 0
-  flowMaterial: {fileID: 0}
 --- !u!850595691 &1427622673
 LightingSettings:
   m_ObjectHideFlags: 0
